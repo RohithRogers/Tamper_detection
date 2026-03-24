@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+
+# Models (optional to ignore if large, but here let's keep it if small)
+# models/*.pth 
+
+# Project Outputs
+tamper_map*.png
+recovered*.png
+test_*.png
+output.txt
+full_trace.txt
+output_utf8.txt
+watermarked_hares.png
+suspect_hares.png
+tamper_map_test.png
+recovered_test.png
