@@ -58,19 +58,19 @@ python train_autoencoder.py
 ## 📸 Results & Example Images
 
 ### Original Image
-![Original Image](tree.jpg)
+![Original Image](test_images/tree.jpg)
 
 ### Watermarked Image
-![Watermarked Image](treenew.png)
+![Watermarked Image](test_images/treenew.png)
 
 ### Tampered Image
-![Tampered Image](suspect.png)
+![Tampered Image](test_images/suspect.png)
 
 ### Tamper Detection Map
-![Tamper Detection Map](tampered_map.png)
+![Tamper Detection Map](test_images/tampered_map.png)
 
 ### Recovered Image(s)
-![Recovered Image](recovered.png)
+![Recovered Image](test_images/recovered.png)
 
 ---
 **Note**: This system is designed for **blind detection**. The original image is **NOT** required for verification or recovery, as all necessary data is embedded within the watermarked image itself.
