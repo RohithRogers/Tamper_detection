@@ -67,7 +67,7 @@ python train_autoencoder.py
 ![Tampered Image](test_images/suspect.png)
 
 ### Tamper Detection Map
-![Tamper Detection Map](test_images/tampered_map.png)
+![Tamper Detection Map](test_images/tamper_map.png)
 
 ### Recovered Image(s)
 ![Recovered Image](test_images/recovered.png)
