@@ -3,6 +3,32 @@ import torch
 import numpy as np
 import torchvision.transforms.functional as TF
 from PIL import Image
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+
+def verify_chunk_hashes(chunk_indices, blocks_msb_chunk, payloads_chunk, key_bytes):
+    # blocks_msb_chunk: (chunk_size, 48) bytes
+    # payloads_chunk: (chunk_size, 12) bytes
+    
+    results = []
+    for idx in range(len(chunk_indices)):
+        j = chunk_indices[idx]
+        msb_bytes = blocks_msb_chunk[idx]
+        payload = payloads_chunk[idx]
+        
+        extracted_hash = payload[1:] # 11 bytes
+        latent_byte = payload[0]
+        
+        hasher = hashlib.sha256()
+        hasher.update(msb_bytes)
+        hasher.update(int(j).to_bytes(4, 'big'))
+        hasher.update(key_bytes)
+        digest = hasher.digest()
+        recomputed_hash = digest[:11]
+        
+        tampered = (extracted_hash != recomputed_hash)
+        results.append((j, tampered, latent_byte))
+    return results
 
 def verify_and_recover(image_path, out_map_path, out_recovered_path, model, key="secret"):
     img = Image.open(image_path).convert('RGB')
@@ -24,41 +50,60 @@ def verify_and_recover(image_path, out_map_path, out_recovered_path, model, key=
     for i, j in enumerate(mapping):
         inverse_mapping[j] = i
 
-    tamper_map = np.zeros(num_blocks, dtype=bool)
-    extracted_latents = torch.zeros((num_blocks, 8), dtype=torch.float32)
+    print("Extracting payloads from LSBs (vectorized)...")
+    blocks_np = blocks_uint8.numpy().reshape(num_blocks, 48)
+    lsbs = blocks_np & 0x03
+    lsbs_reshaped = lsbs.reshape(num_blocks, 12, 4)
+    payloads_np = (lsbs_reshaped[:, :, 0] << 6) | (lsbs_reshaped[:, :, 1] << 4) | \
+                  (lsbs_reshaped[:, :, 2] << 2) | lsbs_reshaped[:, :, 3]
+    # payloads_np: (num_blocks, 12) uint8
+    
+    msb_list = [(blocks_np[j] & 0xFC).tobytes() for j in range(num_blocks)]
+    key_bytes = key.encode()
 
-    for j in range(num_blocks):
-        block = blocks_uint8[j]
-        block_flat = block.reshape(-1)
-        
-        payload_bytes = bytearray(12)
-        for byte_idx in range(12):
-            part0 = block_flat[byte_idx*4 + 0] & 0x3
-            part1 = block_flat[byte_idx*4 + 1] & 0x3
-            part2 = block_flat[byte_idx*4 + 2] & 0x3
-            part3 = block_flat[byte_idx*4 + 3] & 0x3
+    tamper_map = np.zeros(num_blocks, dtype=bool)
+    latent_bytes_extracted = np.zeros(num_blocks, dtype=np.uint8)
+
+    print("Verifying blocks (chunked)...")
+    chunk_size = 20000
+    num_chunks = (num_blocks + chunk_size - 1) // chunk_size
+    
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for c in range(num_chunks):
+            start = c * chunk_size
+            end = min((c + 1) * chunk_size, num_blocks)
             
-            val = (part0 << 6) | (part1 << 4) | (part2 << 2) | part3
-            payload_bytes[byte_idx] = val
+            chunk_indices = np.arange(start, end)
+            msb_chunk = msb_list[start:end]
+            payloads_chunk = [p.tobytes() for p in payloads_np[start:end]]
             
-        latent_byte = payload_bytes[0]
-        hash_88bits_extracted = bytes(payload_bytes[1:])
-        
-        block_msb = block & 0xFC
-        hasher = hashlib.sha256()
-        hasher.update(block_msb.numpy().tobytes())
-        hasher.update(j.to_bytes(4, 'big'))
-        hasher.update(key.encode())
-        digest = hasher.digest()
-        hash_88bits_recomputed = digest[:11]
-        
-        if hash_88bits_extracted != hash_88bits_recomputed:
-            tamper_map[j] = True
+            futures.append(executor.submit(verify_chunk_hashes, chunk_indices, msb_chunk, payloads_chunk, key_bytes))
             
-        i = inverse_mapping[j]
-        for bit_idx in range(8):
-            bit_val = (latent_byte >> (7 - bit_idx)) & 1
-            extracted_latents[i, bit_idx] = float(bit_val)
+        for future in tqdm(futures, total=num_chunks):
+            chunk_results = future.result()
+            for j, tampered, latent_byte in chunk_results:
+                tamper_map[j] = tampered
+                latent_bytes_extracted[j] = latent_byte
+
+    # Convert latent bytes back to bits for recovery
+    # Each latent_byte is 8 bits for a recovery block i = inverse_mapping[j]
+    print("Preparing latent bits for recovery...")
+    extracted_latents = torch.zeros((num_blocks, 8), dtype=torch.float32)
+    
+    # Vectorize latent byte -> bits conversion
+    # latent_bytes_extracted[j] contains latent for block i = inverse_mapping[j]
+    # So extracted_latents[i] comes from latent_bytes_extracted[j]
+    # bits = np.unpackbits(latent_bytes_extracted).reshape(num_blocks, 8)
+    # Then map them to i
+    all_bits = np.unpackbits(latent_bytes_extracted).reshape(num_blocks, 8).astype(np.float32)
+    # extracted_latents[i] is latent for block i, which was stored in block j=mapping[i]
+    # So we need to index all_bits with mapping? 
+    # Let's re-read: block j stores latent for block i = inverse_mapping[j].
+    # So i = inverse_mapping[j]. We want extracted_latents[i] = all_bits[j].
+    # This means extracted_latents[inverse_mapping] = torch.from_numpy(all_bits).
+    # Correct.
+    extracted_latents[inverse_mapping] = torch.from_numpy(all_bits)
 
     rows = h // 4
     cols = w // 4
@@ -73,9 +118,9 @@ def verify_and_recover(image_path, out_map_path, out_recovered_path, model, key=
         map_img.save(out_map_path)
         print(f"Tamper map saved to {out_map_path}")
 
-    # Recovery
     device = next(model.parameters()).device
     model.eval()
+    print("Recovering tampered blocks...")
     with torch.no_grad():
         recovered_blocks_tensor = model.decode(extracted_latents.to(device))
         
@@ -88,7 +133,6 @@ def verify_and_recover(image_path, out_map_path, out_recovered_path, model, key=
             if not tamper_map[j]:
                 recovered_blocks[b_idx] = recovered_blocks_tensor[b_idx]
             else:
-                # Fill with black block indicating unrecoverable
                 recovered_blocks[b_idx] = torch.zeros_like(recovered_blocks[b_idx])
 
     recovered_blocks_final = recovered_blocks.reshape(rows, cols, 3, 4, 4)
@@ -97,4 +141,3 @@ def verify_and_recover(image_path, out_map_path, out_recovered_path, model, key=
     out_recovered_img = Image.fromarray(out_recovered_tensor.numpy().transpose(1, 2, 0), 'RGB')
     out_recovered_img.save(out_recovered_path, format="PNG")
     print(f"Recovered image saved to {out_recovered_path}")
-

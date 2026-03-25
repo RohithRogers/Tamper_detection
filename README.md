@@ -55,5 +55,22 @@ python train_autoencoder.py
 - `models/`: Contains pre-trained weights.
 - `run_pipeline.py`: Comprehensive test script for the entire flow.
 
+## 📸 Results & Example Images
+
+### Original Image
+![Original Image](tree.jpg)
+
+### Watermarked Image
+![Watermarked Image](treenew.png)
+
+### Tampered Image
+![Tampered Image](suspect.png)
+
+### Tamper Detection Map
+![Tamper Detection Map](tampered_map.png)
+
+### Recovered Image(s)
+![Recovered Image](recovered.png)
+
 ---
 **Note**: This system is designed for **blind detection**. The original image is **NOT** required for verification or recovery, as all necessary data is embedded within the watermarked image itself.

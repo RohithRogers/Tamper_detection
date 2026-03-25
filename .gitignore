@@ -13,8 +13,6 @@ env/
 # models/*.pth 
 
 # Project Outputs
-tamper_map*.png
-recovered*.png
 test_*.png
 output.txt
 full_trace.txt
